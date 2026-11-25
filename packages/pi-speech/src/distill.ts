@@ -10,6 +10,8 @@ export interface Distilled {
 	text: string;
 	/** Short questions about things that were genuinely ambiguous. */
 	unclear: string[];
+	/** English coaching footer on the raw dictation, when the model produced one. */
+	english?: string;
 	/** "model" when a model rewrote it, "heuristic" when the local fallback did. */
 	by: "model" | "heuristic";
 }
@@ -27,7 +29,12 @@ Rules:
 8. Editing by voice. If the dictation is an instruction about the ALREADY TYPED text ("make that a list", "drop the second point", "change X to Y", "shorter", "start over"), apply it to that text and output the edited message; do not append the instruction.
 9. PERSONAL DICTIONARY lists corrections the developer made to earlier dictations: when the same words come up, write them the corrected way.
 
-Output exactly the message. If there are unclear points, end with a line containing only ---unclear--- followed by one "- question" line each.`;
+Output exactly the message. If there are unclear points, end with a line containing only ---unclear--- followed by one "- question" line each.
+10. English coaching. The developer is improving their spoken English; RAW DICTATION is what they actually said. After everything else (including any ---unclear--- lines), end with a line containing only ---english--- followed by the coaching footer:
+- At most 2 corrections, choosing what most hurts clarity or nativeness. One line each: the words as spoken in quotes, an arrow, then the native way to say it (grammar, word choice, or phrasing a native speaker would use). Note unnatural-but-grammatical phrasing too.
+- If the raw dictation was already fully grammatical and native-sounding, output exactly one line: \`🗣️ English: native-sounding — no corrections.\`
+- Never flag the words the developer was quoting, reading, or naming (code, error messages, file paths). Never invent mistakes.
+- Start the footer with \`🗣️ English:\` and keep it to 4 lines maximum. It is coaching for the developer to read while reviewing, not part of the message.`;
 
 function lastAssistantText(branch: readonly any[]): string {
 	for (let i = branch.length - 1; i >= 0; i--) {
@@ -99,12 +106,14 @@ export function distillPrompt(raw: string, v: Vocabulary, branch: readonly any[]
 
 export function parseDistilled(out: string): Omit<Distilled, "by"> {
 	const text = out.replace(/^```(?:\w+)?\n([\s\S]*?)\n```$/m, "$1").trim();
-	const [body, tail = ""] = text.split(/^\s*-{3}\s*unclear\s*-{3}\s*$/im);
+	const [main, englishTail = ""] = text.split(/^\s*-{3}\s*english\s*-{3}\s*$/im);
+	const [body, tail = ""] = main.split(/^\s*-{3}\s*unclear\s*-{3}\s*$/im);
 	const unclear = tail
 		.split("\n")
 		.map((l) => l.replace(/^\s*[-*•]\s*/, "").trim())
 		.filter(Boolean);
-	return { text: body.trim(), unclear };
+	const english = englishTail.trim() || undefined;
+	return english ? { text: body.trim(), unclear, english } : { text: body.trim(), unclear };
 }
 
 // ── heuristic fallback ──────────────────────────────────────────────────────────────────────────────────
@@ -160,8 +169,9 @@ export async function distill(
 	return heuristicDistill(raw, v);
 }
 
-/** Editor text: the message, then any unclear points as a short list the user can keep or delete. */
-export function editorText(d: Pick<Distilled, "text" | "unclear">): string {
-	if (!d.unclear.length) return d.text;
-	return `${d.text}\n\nUnclear:\n${d.unclear.map((u) => `- ${u}`).join("\n")}`;
+/** Editor text: the message, then any unclear points as a short list the user can keep or delete, then the English coaching footer. */
+export function editorText(d: Pick<Distilled, "text" | "unclear" | "english">): string {
+	let t = d.unclear.length ? `${d.text}\n\nUnclear:\n${d.unclear.map((u) => `- ${u}`).join("\n")}` : d.text;
+	if (d.english) t += `\n\n---\n${d.english}\n_(English coaching — for you, not part of the request.)_`;
+	return t;
 }
